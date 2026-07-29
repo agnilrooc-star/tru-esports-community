@@ -344,7 +344,9 @@ function PageIntro({
   );
 }
 
-function ScrimsView({
+// Retained temporarily as a visual fallback while the live scrim migration rolls out.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function ScrimsPreviewView({
   onCreateTeam,
   onOpenMatch,
   loggedIn,
@@ -499,6 +501,306 @@ function ScrimsView({
       </div>}
     </section>
   );
+}
+
+type LiveTeam = {
+  id: string;
+  name: string;
+  tag: string;
+  region: string;
+  elo: number;
+  role: "player" | "captain" | "manager" | "substitute";
+};
+
+type LiveScrim = {
+  id: string;
+  host_team_id: string;
+  opponent_team_id: string | null;
+  region: string;
+  format: string;
+  scheduled_at: string;
+  status: "open" | "accepted" | "live" | "awaiting_confirmation" | "completed" | "cancelled";
+  room_code?: string | null;
+  room_password?: string | null;
+  host_team: { id: string; name: string; tag: string; elo: number };
+  opponent_team: { id: string; name: string; tag: string; elo: number } | null;
+};
+
+function ScrimsView({
+  userId,
+  loggedIn,
+  onAuthRequired,
+}: {
+  userId: string | null;
+  loggedIn: boolean;
+  onAuthRequired: () => void;
+  onCreateTeam?: () => void;
+  onOpenMatch?: () => void;
+}) {
+  const [team, setTeam] = useState<LiveTeam | null>(null);
+  const [liveScrims, setLiveScrims] = useState<LiveScrim[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [teamForm, setTeamForm] = useState(false);
+  const [scrimForm, setScrimForm] = useState(false);
+  const [activeRoom, setActiveRoom] = useState<LiveScrim | null>(null);
+
+  async function loadScrims() {
+    setLoading(true);
+    setError("");
+
+    const { data: scrimData, error: scrimError } = await supabase
+      .from("scrims")
+      .select("id,host_team_id,opponent_team_id,region,format,scheduled_at,status,room_code,room_password,host_team:teams!scrims_host_team_id_fkey(id,name,tag,elo),opponent_team:teams!scrims_opponent_team_id_fkey(id,name,tag,elo)")
+      .order("scheduled_at", { ascending: true });
+
+    if (scrimError) setError(scrimError.message);
+    else setLiveScrims((scrimData ?? []) as unknown as LiveScrim[]);
+
+    if (userId) {
+      const { data: membership } = await supabase
+        .from("team_members")
+        .select("role,team_id,teams!inner(id,name,tag,region,elo)")
+        .eq("profile_id", userId)
+        .limit(1)
+        .maybeSingle();
+
+      if (membership?.teams) {
+        const linkedTeam = membership.teams as unknown as { id: string; name: string; tag: string; region: string; elo: number };
+        setTeam({ ...linkedTeam, role: membership.role as LiveTeam["role"] });
+      } else {
+        setTeam(null);
+      }
+    } else {
+      setTeam(null);
+    }
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => void loadScrims(), 0);
+    const channel = supabase
+      .channel("public-scrims")
+      .on("postgres_changes", { event: "*", schema: "public", table: "scrims" }, () => void loadScrims())
+      .subscribe();
+    return () => { window.clearTimeout(initialLoad); void supabase.removeChannel(channel); };
+    // loadScrims intentionally reloads when the authenticated user changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  async function createTeam(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!userId) return onAuthRequired();
+    const form = new FormData(event.currentTarget);
+    const { data, error: teamError } = await supabase
+      .from("teams")
+      .insert({
+        owner_id: userId,
+        name: String(form.get("name") ?? "").trim(),
+        tag: String(form.get("tag") ?? "").trim().toUpperCase(),
+        region: String(form.get("region") ?? "Philippines"),
+        goal: "Competitive",
+      })
+      .select("id")
+      .single();
+
+    if (teamError || !data) {
+      setError(teamError?.message ?? "Could not create the team.");
+      return;
+    }
+
+    const { error: memberError } = await supabase.from("team_members").insert({
+      team_id: data.id,
+      profile_id: userId,
+      role: "captain",
+      is_active_lineup: true,
+      game_role: "Manager",
+    });
+    if (memberError) {
+      setError(memberError.message);
+      return;
+    }
+    setTeamForm(false);
+    await loadScrims();
+  }
+
+  async function createScrim(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!userId || !team) return;
+    const form = new FormData(event.currentTarget);
+    const { error: createError } = await supabase.from("scrims").insert({
+      host_team_id: team.id,
+      region: String(form.get("region")),
+      format: String(form.get("format")),
+      scheduled_at: new Date(String(form.get("scheduled_at"))).toISOString(),
+      created_by: userId,
+      status: "open",
+      minimum_elo: Math.max(0, team.elo - 250),
+    });
+    if (createError) {
+      setError(createError.message);
+      return;
+    }
+    setScrimForm(false);
+    await loadScrims();
+  }
+
+  async function challengeScrim(scrim: LiveScrim) {
+    if (!loggedIn || !userId) return onAuthRequired();
+    if (!team) {
+      setTeamForm(true);
+      return;
+    }
+    if (scrim.host_team_id === team.id) return;
+    const { error: challengeError } = await supabase.rpc("accept_scrim", {
+      target_scrim: scrim.id,
+      challenger_team: team.id,
+    });
+    if (challengeError) setError(challengeError.message);
+    else await loadScrims();
+  }
+
+  const myMatches = team
+    ? liveScrims.filter((scrim) => scrim.host_team_id === team.id || scrim.opponent_team_id === team.id)
+    : [];
+
+  return (
+    <section className="app-page live-scrims-page">
+      <PageIntro
+        kicker="Live Scrim Finder"
+        title="FIND YOUR NEXT FIGHT."
+        copy="Real teams, real challenges, private match rooms, and results stored securely with Supabase."
+        action={<button className="button" onClick={() => loggedIn ? team ? setScrimForm(true) : setTeamForm(true) : onAuthRequired()}>{team ? "＋ Post a scrim" : "＋ Create a team"}</button>}
+      />
+
+      {error && <div className="scrim-system-error" role="alert"><strong>Action needed</strong><span>{error}</span><button onClick={() => setError("")}>×</button></div>}
+
+      <div className="live-scrim-summary">
+        <div><span>Matchmaking</span><strong>{liveScrims.filter((scrim) => scrim.status === "open").length}</strong><small>Open scrims</small></div>
+        <div><span>Your account</span><strong>{loggedIn ? "Online" : "Guest"}</strong><small>{team ? `${team.name} · ${team.elo} ELO` : loggedIn ? "Create a team to compete" : "Log in to challenge"}</small></div>
+        <div><span>Privacy</span><strong>Locked</strong><small>Match rooms are participant-only</small></div>
+      </div>
+
+      <div className="live-scrim-grid">
+        <aside className="live-team-card">
+          {team ? <>
+            <span className="org-panel-label">Your team</span>
+            <div className="live-team-mark">{team.tag}</div>
+            <h2>{team.name}</h2><p>{team.region} · {team.role}</p>
+            <strong>{team.elo} ELO</strong>
+            <button onClick={() => setScrimForm(true)}>Post availability</button>
+          </> : <>
+            <span className="org-panel-label">Your team</span><TruMark />
+            <h2>{loggedIn ? "BUILD YOUR FIVE." : "LOG IN TO COMPETE."}</h2>
+            <p>{loggedIn ? "Create your team and become its first captain." : "Browse publicly, then log in when you are ready to challenge."}</p>
+            <button onClick={() => loggedIn ? setTeamForm(true) : onAuthRequired()}>{loggedIn ? "Create team" : "Log in"}</button>
+          </>}
+        </aside>
+
+        <div className="live-scrim-list">
+          <div className="live-list-head"><div><strong>Open challenges</strong><span>Sorted by scheduled time</span></div><button onClick={() => void loadScrims()}>Refresh</button></div>
+          {loading ? <div className="live-empty">Loading live scrims…</div> : liveScrims.filter((scrim) => scrim.status === "open").length === 0 ? <div className="live-empty"><TruMark compact /><strong>No open scrims yet.</strong><span>Create the first listing for the community.</span></div> :
+            liveScrims.filter((scrim) => scrim.status === "open").map((scrim) => <article className="live-scrim-row" key={scrim.id}>
+              <TeamBadge tag={scrim.host_team.tag} />
+              <div><strong>{scrim.host_team.name}</strong><span>{scrim.region} · {scrim.format}</span></div>
+              <div><small>ELO</small><strong>{scrim.host_team.elo}</strong></div>
+              <time>{new Date(scrim.scheduled_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time>
+              <button disabled={team?.id === scrim.host_team_id} onClick={() => void challengeScrim(scrim)}>{team?.id === scrim.host_team_id ? "Your listing" : "Challenge →"}</button>
+            </article>)}
+        </div>
+      </div>
+
+      {team && <section className="my-live-matches"><div className="org-section-title"><span>Your challenges</span><h2>PRIVATE MATCH ROOMS.</h2></div>{myMatches.length === 0 ? <p>No challenges yet.</p> : <div>{myMatches.map((scrim) => <article key={scrim.id}><span className={`match-status match-status--${scrim.status}`}>{scrim.status}</span><strong>{scrim.host_team.name} vs {scrim.opponent_team?.name ?? "Waiting for opponent"}</strong><small>{scrim.format} · {new Date(scrim.scheduled_at).toLocaleString()}</small>{scrim.opponent_team && <button onClick={() => setActiveRoom(scrim)}>Enter private room →</button>}</article>)}</div>}</section>}
+
+      {teamForm && <div className="modal-backdrop" onMouseDown={() => setTeamForm(false)}><section className="live-form-modal" role="dialog" aria-modal="true" aria-label="Create a team" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setTeamForm(false)}>×</button><p className="eyebrow">Team setup</p><h2>CREATE YOUR TEAM.</h2><form onSubmit={createTeam}><label>Team name<input name="name" required maxLength={40} placeholder="e.g. Tru Phantoms" /></label><label>Team tag<input name="tag" required maxLength={5} placeholder="TRU" /></label><label>Region<select name="region" defaultValue="Philippines"><option>Philippines</option><option>SEA</option><option>Singapore</option><option>Other</option></select></label><button className="button" type="submit">Create team →</button></form></section></div>}
+
+      {scrimForm && team && <div className="modal-backdrop" onMouseDown={() => setScrimForm(false)}><section className="live-form-modal" role="dialog" aria-modal="true" aria-label="Post a scrim" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setScrimForm(false)}>×</button><p className="eyebrow">Scrim listing</p><h2>POST AVAILABILITY.</h2><form onSubmit={createScrim}><label>Region<select name="region" defaultValue={team.region}><option>Philippines</option><option>SEA</option><option>Singapore</option></select></label><label>Format<select name="format" defaultValue="BO3"><option>BO1</option><option>BO3</option><option>BO5</option></select></label><label>Date and time<input name="scheduled_at" type="datetime-local" required /></label><button className="button" type="submit">Publish scrim →</button></form></section></div>}
+
+      {activeRoom && userId && team && <LiveMatchRoom scrim={activeRoom} userId={userId} myTeam={team} onClose={() => setActiveRoom(null)} onRefresh={loadScrims} />}
+    </section>
+  );
+}
+
+function LiveMatchRoom({ scrim, userId, myTeam, onClose, onRefresh }: { scrim: LiveScrim; userId: string; myTeam: LiveTeam; onClose: () => void; onRefresh: () => Promise<void> }) {
+  const [messages, setMessages] = useState<Array<{ id: number; body: string; sender_id: string; created_at: string; profiles?: { display_name: string } | null }>>([]);
+  const [result, setResult] = useState<{ winner_team_id: string; host_score: number; opponent_score: number; host_confirmed: boolean; opponent_confirmed: boolean; elo_processed: boolean } | null>(null);
+  const [draft, setDraft] = useState("");
+  const [roomCode, setRoomCode] = useState(scrim.room_code ?? "");
+  const [roomPassword, setRoomPassword] = useState(scrim.room_password ?? "");
+  const [roomError, setRoomError] = useState("");
+  const canManage = myTeam.role === "captain" || myTeam.role === "manager";
+
+  async function loadMessages() {
+    const { data, error } = await supabase.from("match_messages").select("id,body,sender_id,created_at,profiles(display_name)").eq("scrim_id", scrim.id).order("created_at");
+    if (error) setRoomError(error.message);
+    else setMessages((data ?? []) as unknown as typeof messages);
+    const { data: resultData } = await supabase.from("match_results").select("winner_team_id,host_score,opponent_score,host_confirmed,opponent_confirmed,elo_processed").eq("scrim_id", scrim.id).maybeSingle();
+    setResult(resultData);
+  }
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => void loadMessages(), 0);
+    const channel = supabase.channel(`match-${scrim.id}`).on("postgres_changes", { event: "INSERT", schema: "public", table: "match_messages", filter: `scrim_id=eq.${scrim.id}` }, () => void loadMessages()).subscribe();
+    return () => { window.clearTimeout(initialLoad); void supabase.removeChannel(channel); };
+    // loadMessages is scoped to this immutable match room.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrim.id]);
+
+  async function sendMessage(event: FormEvent) {
+    event.preventDefault();
+    if (!draft.trim()) return;
+    const { error } = await supabase.from("match_messages").insert({ scrim_id: scrim.id, sender_id: userId, body: draft.trim() });
+    if (error) setRoomError(error.message);
+    else setDraft("");
+  }
+
+  async function saveRoomDetails() {
+    const { error } = await supabase.from("scrims").update({ room_code: roomCode.trim(), room_password: roomPassword.trim(), status: "live" }).eq("id", scrim.id);
+    if (error) setRoomError(error.message);
+    else await onRefresh();
+  }
+
+  async function submitResult(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const { data, error } = await supabase.rpc("submit_scrim_result", {
+      target_scrim: scrim.id,
+      winning_team: String(form.get("winner")),
+      host_maps: Number(form.get("host_score")),
+      opponent_maps: Number(form.get("opponent_score")),
+    });
+    if (error) {
+      setRoomError(error.message);
+      return;
+    }
+    setResult(data as unknown as typeof result);
+    await onRefresh();
+  }
+
+  async function confirmExistingResult() {
+    if (!result) return;
+    const { data, error } = await supabase.rpc("submit_scrim_result", {
+      target_scrim: scrim.id,
+      winning_team: result.winner_team_id,
+      host_maps: result.host_score,
+      opponent_maps: result.opponent_score,
+    });
+    if (error) setRoomError(error.message);
+    else {
+      setResult(data as unknown as typeof result);
+      await onRefresh();
+    }
+  }
+
+  return <div className="match-room-overlay"><section className="live-match-room" role="dialog" aria-modal="true" aria-label="Private scrim room">
+    <header><div><span className="room-open"><i /> Private match room</span><h2>{scrim.host_team.name} <b>VS</b> {scrim.opponent_team?.name}</h2><p>{scrim.format} · {scrim.region}</p></div><button onClick={onClose}>×</button></header>
+    <div className="room-privacy-banner"><span>⌾</span><div><strong>Participant-only access</strong><small>Protected by Supabase row-level security.</small></div></div>
+    {roomError && <div className="scrim-system-error">{roomError}</div>}
+    <div className="live-room-body">
+      <div className="room-chat"><div className="chat-head"><strong>Match chat</strong></div><div className="messages">{messages.length === 0 ? <p className="live-empty">No messages yet.</p> : messages.map((message) => <div className={message.sender_id === userId ? "message message--mine" : "message"} key={message.id}><span>{message.sender_id === userId ? myTeam.tag : "OPP"}</span><div><p>{message.body}</p><small>{message.profiles?.display_name ?? "Player"} · {new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div></div>)}</div><form className="chat-form" onSubmit={sendMessage}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Message the other team…" /><button disabled={!draft.trim()}>Send</button></form></div>
+      <aside className="live-room-controls"><span className="org-panel-label">Room details</span><label>Lobby code<input value={roomCode} onChange={(event) => setRoomCode(event.target.value)} readOnly={!canManage} placeholder="Waiting for captain" /></label><label>Password<input value={roomPassword} onChange={(event) => setRoomPassword(event.target.value)} readOnly={!canManage} placeholder="Waiting for captain" /></label>{canManage && <button onClick={() => void saveRoomDetails()}>Save room details</button>}<p>Either captain or manager may post the room details.</p><div className="live-result-divider" /><span className="org-panel-label">Match result</span>{result ? <div className="live-result-status"><strong>{result.winner_team_id === scrim.host_team_id ? scrim.host_team.name : scrim.opponent_team?.name} won {result.host_score}–{result.opponent_score}</strong><span>Host: {result.host_confirmed ? "Confirmed" : "Waiting"}</span><span>Opponent: {result.opponent_confirmed ? "Confirmed" : "Waiting"}</span><b>{result.elo_processed ? "ELO updated ±25" : "Waiting for both captains"}</b>{canManage && !result.elo_processed && <button type="button" onClick={() => void confirmExistingResult()}>Confirm same result</button>}</div> : canManage ? <form className="live-result-form" onSubmit={submitResult}><label>Winner<select name="winner" defaultValue={scrim.host_team_id}><option value={scrim.host_team_id}>{scrim.host_team.name}</option><option value={scrim.opponent_team_id ?? ""}>{scrim.opponent_team?.name}</option></select></label><div><label>Host maps<input name="host_score" type="number" min="0" max="5" defaultValue="2" /></label><label>Opponent maps<input name="opponent_score" type="number" min="0" max="5" defaultValue="1" /></label></div><button type="submit">Submit result</button></form> : <p>Only captains and managers can submit results.</p>}</aside>
+    </div>
+  </section></div>;
 }
 
 function SocialsView({
@@ -804,7 +1106,10 @@ function AuthModal({
       ? await supabase.auth.signUp({
           email,
           password,
-          options: { data: { display_name: displayName.trim() } },
+          options: {
+            data: { display_name: displayName.trim() },
+            emailRedirectTo: window.location.origin,
+          },
         })
       : await supabase.auth.signInWithPassword({ email, password });
 
@@ -826,7 +1131,7 @@ function AuthModal({
         <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
         <TruMark />
         {done ? (
-          <div className="success-state"><span>✓</span><h2>{needsConfirmation ? "CHECK YOUR EMAIL." : tab === "join" ? "WELCOME TO TRU." : "WELCOME BACK."}</h2><p>{needsConfirmation ? "Use the confirmation link from Supabase, then return here and log in." : "Your account is ready. Your private team dashboard is now available in the navigation."}</p>{needsConfirmation ? <button className="button" onClick={onClose}>Close</button> : <button className="button" onClick={onSuccess}>Open My Team</button>}</div>
+          <div className="success-state"><span>✓</span><h2>{needsConfirmation ? "CHECK YOUR EMAIL." : tab === "join" ? "WELCOME TO TRU." : "WELCOME BACK."}</h2><p>{needsConfirmation ? "Use the confirmation link from Supabase, then return here and log in." : "Your account is ready. Continue to the page you were using."}</p>{needsConfirmation ? <button className="button" onClick={onClose}>Close</button> : <button className="button" onClick={onSuccess}>Continue</button>}</div>
         ) : (
           <>
             <p className="eyebrow">Welcome to Tru</p>
@@ -835,7 +1140,7 @@ function AuthModal({
             <form onSubmit={submitAuth}>
               {tab === "join" && <label>Display name<input required value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Your community name" /></label>}
               <label>Email<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
-              <label>Password<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" /></label>
+              <label>Password<input required minLength={tab === "join" ? 8 : undefined} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={tab === "join" ? "At least 8 characters" : "Your password"} /></label>
               {authError && <p className="auth-error" role="alert">{authError}</p>}
               <button className="button" type="submit" disabled={submitting}>{submitting ? "Please wait…" : tab === "join" ? "Join the community" : "Log in"}</button>
             </form>
@@ -1032,15 +1337,20 @@ export default function Home() {
   const [view, setView] = useState<View>("Home");
   const [authMode, setAuthMode] = useState<"login" | "join" | null>(null);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
   const [teamModal, setTeamModal] = useState(false);
   const [matchOpen, setMatchOpen] = useState(false);
   const [recruitmentTrack, setRecruitmentTrack] = useState<"player" | "staff" | null>(null);
   const [toast, setToast] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setLoggedIn(Boolean(data.session)));
+    supabase.auth.getSession().then(({ data }) => {
+      setLoggedIn(Boolean(data.session));
+      setUserId(data.session?.user.id ?? null);
+    });
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       setLoggedIn(Boolean(session));
+      setUserId(session?.user.id ?? null);
     });
     return () => data.subscription.unsubscribe();
   }, []);
@@ -1072,32 +1382,25 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2200);
   }
 
-  function requireLogin(action: () => void) {
-    if (!loggedIn) {
-      setAuthMode("login");
-      return;
-    }
-    action();
-  }
-
   function finishAuth() {
     setLoggedIn(true);
     setAuthMode(null);
-    setView("My Team");
-    showToast("Welcome back — your team dashboard is ready");
+    setView(view === "Scrims" ? "Scrims" : "My Team");
+    showToast(view === "Scrims" ? "Welcome back — Scrims is ready" : "Welcome back — your team dashboard is ready");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function logout() {
     await supabase.auth.signOut();
     setLoggedIn(false);
+    setUserId(null);
     setView("Home");
     showToast("You are now logged out");
   }
 
   let currentView: ReactNode;
   if (view === "Scrims") {
-    currentView = <ScrimsView loggedIn={loggedIn} onAuthRequired={() => setAuthMode("login")} onCreateTeam={() => requireLogin(() => setTeamModal(true))} onOpenMatch={() => requireLogin(() => setMatchOpen(true))} />;
+    currentView = <ScrimsView userId={userId} loggedIn={loggedIn} onAuthRequired={() => setAuthMode("login")} />;
   } else if (view === "My Team" && loggedIn) {
     currentView = <MyTeamView onManage={() => setTeamModal(true)} onOpenMatch={() => setMatchOpen(true)} onToast={showToast} />;
   } else if (view === "Socials") {
