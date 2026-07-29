@@ -1025,6 +1025,105 @@ function SocialsView({ userId, loggedIn, onAuthRequired }: { userId: string | nu
   </section>;
 }
 
+type TeamDashboard = {
+  id: string;
+  name: string;
+  tag: string;
+  region: string;
+  elo: number;
+  wins: number;
+  losses: number;
+  role: string;
+};
+
+function LiveMyTeamView({ userId }: { userId: string }) {
+  const [team, setTeam] = useState<TeamDashboard | null>(null);
+  const [members, setMembers] = useState<Array<{ profile_id: string; role: string; game_role: string | null; is_active_lineup: boolean; profiles: { display_name: string; username: string | null } }>>([]);
+  const [matches, setMatches] = useState<LiveScrim[]>([]);
+  const [section, setSection] = useState<"overview" | "roster">("overview");
+  const [loading, setLoading] = useState(true);
+  const [teamError, setTeamError] = useState("");
+
+  useEffect(() => {
+    async function loadTeam() {
+      setLoading(true);
+      const { data: membership, error: membershipError } = await supabase
+        .from("team_members")
+        .select("role,team_id,teams!inner(id,name,tag,region,elo,wins,losses)")
+        .eq("profile_id", userId)
+        .limit(1)
+        .maybeSingle();
+
+      if (membershipError) {
+        setTeamError(membershipError.message);
+        setLoading(false);
+        return;
+      }
+      if (!membership?.teams) {
+        setTeam(null);
+        setLoading(false);
+        return;
+      }
+
+      const linked = membership.teams as unknown as Omit<TeamDashboard, "role">;
+      const liveTeam = { ...linked, role: membership.role } as TeamDashboard;
+      setTeam(liveTeam);
+
+      const [{ data: memberData, error: memberError }, { data: matchData, error: matchError }] = await Promise.all([
+        supabase
+          .from("team_members")
+          .select("profile_id,role,game_role,is_active_lineup,profiles!inner(display_name,username)")
+          .eq("team_id", liveTeam.id)
+          .order("joined_at"),
+        supabase
+          .from("scrims")
+          .select("id,host_team_id,opponent_team_id,region,format,scheduled_at,status,room_code,room_password,host_team:teams!scrims_host_team_id_fkey(id,name,tag,elo),opponent_team:teams!scrims_opponent_team_id_fkey(id,name,tag,elo)")
+          .or(`host_team_id.eq.${liveTeam.id},opponent_team_id.eq.${liveTeam.id}`)
+          .order("scheduled_at", { ascending: false })
+          .limit(20),
+      ]);
+      if (memberError || matchError) setTeamError(memberError?.message ?? matchError?.message ?? "");
+      setMembers((memberData ?? []) as unknown as typeof members);
+      setMatches((matchData ?? []) as unknown as LiveScrim[]);
+      setLoading(false);
+    }
+    void loadTeam();
+  }, [userId]);
+
+  if (loading) return <section className="app-page team-page"><div className="live-empty">Loading your team…</div></section>;
+  if (teamError) return <section className="app-page team-page"><div className="scrim-system-error"><strong>My Team error</strong><span>{teamError}</span></div></section>;
+  if (!team) return <section className="app-page team-page"><PageIntro kicker="Team Command Center" title="YOU ARE NOT ON A TEAM YET." copy="Create your first team from the Scrims page to unlock your team dashboard." /></section>;
+
+  const totalGames = team.wins + team.losses;
+  const winRate = totalGames ? Math.round((team.wins / totalGames) * 100) : 0;
+  const activeMatches = matches.filter((match) => !["completed", "cancelled"].includes(match.status));
+  const completedMatches = matches.filter((match) => match.status === "completed");
+
+  return <section className="app-page team-page">
+    <PageIntro kicker="Team Command Center" title="YOUR TEAM. ONE PLACE." copy={`Manage ${team.name}, track team ELO, and prepare for upcoming scrims.`} />
+    <article className="team-hero panel-card">
+      <div className="team-hero-mark"><TeamBadge tag={team.tag} /><span>Your team</span></div>
+      <div className="team-hero-copy"><div><span className="team-tag">{team.tag} · {team.region}</span><span className="role-chip">{team.role}</span></div><h2>{team.name}</h2><p>Valorant Mobile · Tru competitive community</p></div>
+      <div className="team-hero-stats">
+        <div><span>Team ELO</span><strong>{team.elo}</strong><small>Live ranking score</small></div>
+        <div><span>Record</span><strong>{team.wins}–{team.losses}</strong><small>{winRate}% win rate</small></div>
+        <div><span>Members</span><strong>{members.length}</strong><small>{members.filter((member) => member.is_active_lineup).length} active lineup</small></div>
+      </div>
+    </article>
+    <div className="team-page-tabs" role="tablist">
+      <button className={section === "overview" ? "active" : ""} onClick={() => setSection("overview")}>Overview</button>
+      <button className={section === "roster" ? "active" : ""} onClick={() => setSection("roster")}>Roster <b>{members.length}</b></button>
+    </div>
+    {section === "overview" && <div className="team-overview-grid"><div className="team-overview-main">
+      <article className="next-scrim-card panel-card"><div className="card-label"><span>Active scrims</span><b>{activeMatches.length}</b></div>{activeMatches.length === 0 ? <p className="live-empty">No active scrims. Post availability from the Scrims page.</p> : activeMatches.map((match) => <div className="invite-row" key={match.id}><TeamBadge tag={match.host_team.tag} /><div><strong>{match.host_team.name} vs {match.opponent_team?.name ?? "Waiting for opponent"}</strong><span>{match.format} · {new Date(match.scheduled_at).toLocaleString()}</span></div><em>{match.status.replaceAll("_", " ")}</em></div>)}</article>
+      <article className="team-lineup-card panel-card"><div className="card-label"><span>Current members</span><button onClick={() => setSection("roster")}>View roster →</button></div><div className="team-lineup-table">{members.slice(0, 5).map((member, index) => { const name = member.profiles.display_name || "Tru member"; return <div key={member.profile_id}><span className="lineup-number">{String(index + 1).padStart(2, "0")}</span><Avatar initials={name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()} /><span><strong>{name}</strong><small>@{member.profiles.username ?? "tru-member"}</small></span><b>{member.game_role ?? member.role}</b><span className="member-status"><i />{member.is_active_lineup ? "Active" : "Substitute"}</span></div>; })}</div></article>
+    </div><aside className="team-overview-aside"><article className="team-activity-card panel-card"><div className="card-label"><span>Recent results</span><b>{completedMatches.length}</b></div>{completedMatches.length === 0 ? <p>No completed matches yet.</p> : completedMatches.slice(0, 5).map((match) => <div key={match.id}><span className="activity-icon">✓</span><p><strong>{match.host_team.name} vs {match.opponent_team?.name}</strong><small>{match.format} · Completed</small></p><time>{new Date(match.scheduled_at).toLocaleDateString()}</time></div>)}</article></aside></div>}
+    {section === "roster" && <div className="full-roster panel-card"><div className="full-roster-head"><div><h3>TEAM ROSTER</h3><p>Live members stored in Supabase.</p></div><span>{members.length} members</span></div><div className="roster-columns"><span>Player</span><span>Role</span><span>Team access</span><span>Status</span><span>Lineup</span><span /></div>{members.map((member) => { const name = member.profiles.display_name || "Tru member"; return <article key={member.profile_id}><div><Avatar initials={name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase()} /><span><strong>{name}</strong><small>@{member.profiles.username ?? "tru-member"}</small></span></div><b>{member.game_role ?? "Unassigned"}</b><strong>{member.role}</strong><span className="member-status"><i />Member</span><span className="access-chip">{member.is_active_lineup ? "Active lineup" : "Substitute"}</span><span /></article>; })}</div>}
+  </section>;
+}
+
+// Legacy visual prototype retained for reference while V1 uses LiveMyTeamView.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function MyTeamView({
   onManage,
   onOpenMatch,
@@ -1608,7 +1707,7 @@ export default function Home() {
   if (view === "Scrims") {
     currentView = <ScrimsView userId={userId} loggedIn={loggedIn} onAuthRequired={() => setAuthMode("login")} />;
   } else if (view === "My Team" && loggedIn) {
-    currentView = <MyTeamView onManage={() => setTeamModal(true)} onOpenMatch={() => setMatchOpen(true)} onToast={showToast} />;
+    currentView = userId ? <LiveMyTeamView userId={userId} /> : <div className="live-empty">Loading your team…</div>;
   } else if (view === "Socials") {
     currentView = <SocialsView userId={userId} loggedIn={loggedIn} onAuthRequired={() => setAuthMode("login")} />;
   } else if (view === "Rankings") {
