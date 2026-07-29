@@ -78,16 +78,15 @@ function Header({
     : ["Home", "Scrims", "Socials", "Rankings"];
 
   return (
-    <header className="topbar">
-      <button className="brand" onClick={() => onView("Home")} aria-label="Tru home">
+    <header className="landing-header app-landing-header">
+      <button className="landing-logo" onClick={() => onView("Home")} aria-label="Tru home">
         <TruMark />
-        <span className="brand-name">TRU</span>
       </button>
 
-      <nav className="nav-links" aria-label="Primary navigation">
+      <nav aria-label="Primary navigation">
         {navItems.map((item) => (
           <button
-            className={view === item ? "nav-link is-active" : "nav-link"}
+            className={view === item ? "active" : ""}
             key={item}
             onClick={() => onView(item)}
           >
@@ -96,7 +95,7 @@ function Header({
         ))}
       </nav>
 
-      <div className="account-actions">
+      <div className="app-header-auth">
         {loggedIn ? (
           <div className="signed-account">
             <button className="account-profile" onClick={() => onView("My Team")}>
@@ -107,8 +106,8 @@ function Header({
           </div>
         ) : (
           <>
-            <button className="text-button" onClick={() => onAuth("login")}>Log in</button>
-            <button className="button button--small" onClick={() => onAuth("join")}>Join now</button>
+            <button className="app-header-login" onClick={() => onAuth("login")}>Log in</button>
+            <button className="enter-socials app-header-join" onClick={() => onAuth("join")}>Join Tru <span>›</span></button>
           </>
         )}
       </div>

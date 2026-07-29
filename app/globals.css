@@ -4886,6 +4886,89 @@ a:focus-visible {
   font-size: 20px;
 }
 
+.app-landing-header {
+  grid-template-columns: 150px minmax(0, 1fr) 230px;
+}
+
+.app-landing-header nav {
+  gap: clamp(22px, 3.2vw, 56px);
+}
+
+.app-header-auth {
+  min-width: 0;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.app-header-login {
+  padding: 10px 4px;
+  border: 0;
+  background: transparent;
+  color: #d8e5ec;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.app-header-login:hover {
+  color: var(--cyan);
+}
+
+.app-header-join {
+  min-width: 124px;
+  min-height: 40px;
+}
+
+.app-landing-header .signed-account {
+  min-height: 44px;
+  border-radius: 0;
+  border-color: rgba(85, 199, 243, 0.34);
+  background: rgba(6, 27, 42, 0.68);
+}
+
+.app-landing-header .logout-button {
+  border-radius: 0;
+}
+
+.app-landing-header + .view-shell .app-page {
+  width: min(1450px, 88.6vw);
+  min-height: calc(100vh - 70px);
+  padding-top: 54px;
+}
+
+.app-landing-header + .view-shell .page-intro {
+  min-height: 170px;
+  border-color: rgba(126, 190, 221, 0.17);
+}
+
+.app-landing-header + .view-shell .page-intro h1 {
+  font-family: "Arial Narrow", "Trebuchet MS", sans-serif;
+  color: #f5f8fa;
+  text-transform: uppercase;
+}
+
+.app-landing-header + .view-shell .panel-card,
+.app-landing-header + .view-shell .composer,
+.app-landing-header + .view-shell .feed-post {
+  border-radius: 0;
+  border-color: rgba(126, 190, 221, 0.2);
+  background:
+    linear-gradient(135deg, rgba(22, 63, 85, 0.14), transparent 48%),
+    rgba(3, 19, 31, 0.82);
+  box-shadow: none;
+}
+
+.app-landing-header + .view-shell .panel-card:hover {
+  border-color: rgba(126, 190, 221, 0.2);
+  box-shadow: none;
+  transform: none;
+}
+
 .org-landing {
   min-height: calc(100vh - 70px);
   position: relative;
@@ -5307,6 +5390,14 @@ a:focus-visible {
     gap: 20px;
   }
 
+  .app-landing-header {
+    grid-template-columns: 100px minmax(0, 1fr) 190px;
+  }
+
+  .app-landing-header nav {
+    gap: 16px;
+  }
+
   .org-hero {
     grid-template-columns: 1fr 0.9fr;
   }
@@ -5343,6 +5434,32 @@ a:focus-visible {
 
   .enter-socials {
     min-width: 148px;
+  }
+
+  .app-landing-header {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .app-landing-header .app-header-auth {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .app-landing-header nav {
+    grid-column: 1 / -1;
+  }
+
+  .app-header-login {
+    display: none;
+  }
+
+  .app-header-join {
+    min-width: 132px;
+  }
+
+  .app-landing-header + .view-shell .app-page {
+    width: 92vw;
+    padding-top: 40px;
   }
 
   .org-hero {
