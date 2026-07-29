@@ -66,21 +66,6 @@ create table public.posts (
   created_at timestamptz not null default now()
 );
 
-create table public.post_likes (
-  post_id uuid not null references public.posts(id) on delete cascade,
-  profile_id uuid not null references public.profiles(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key (post_id, profile_id)
-);
-
-create table public.post_comments (
-  id bigint generated always as identity primary key,
-  post_id uuid not null references public.posts(id) on delete cascade,
-  author_id uuid not null references public.profiles(id) on delete cascade,
-  body text not null check (char_length(body) between 1 and 1000),
-  created_at timestamptz not null default now()
-);
-
 create table public.scrims (
   id uuid primary key default gen_random_uuid(),
   host_team_id uuid not null references public.teams(id) on delete cascade,
@@ -90,8 +75,6 @@ create table public.scrims (
   minimum_elo integer,
   scheduled_at timestamptz not null,
   status public.scrim_status not null default 'open',
-  room_code text,
-  room_password text,
   created_by uuid not null references public.profiles(id) on delete restrict,
   created_at timestamptz not null default now(),
   check (opponent_team_id is null or opponent_team_id <> host_team_id)
@@ -161,8 +144,6 @@ alter table public.teams enable row level security;
 alter table public.team_members enable row level security;
 alter table public.team_invites enable row level security;
 alter table public.posts enable row level security;
-alter table public.post_likes enable row level security;
-alter table public.post_comments enable row level security;
 alter table public.scrims enable row level security;
 alter table public.match_messages enable row level security;
 alter table public.match_results enable row level security;
@@ -187,12 +168,6 @@ create policy "Posts are public" on public.posts for select using (true);
 create policy "Users create posts" on public.posts for insert to authenticated with check (author_id = auth.uid());
 create policy "Authors manage posts" on public.posts for update using (author_id = auth.uid());
 create policy "Authors delete posts" on public.posts for delete using (author_id = auth.uid());
-create policy "Likes are public" on public.post_likes for select using (true);
-create policy "Users like posts" on public.post_likes for insert to authenticated with check (profile_id = auth.uid());
-create policy "Users remove own likes" on public.post_likes for delete using (profile_id = auth.uid());
-create policy "Comments are public" on public.post_comments for select using (true);
-create policy "Users create comments" on public.post_comments for insert to authenticated with check (author_id = auth.uid());
-create policy "Authors delete comments" on public.post_comments for delete using (author_id = auth.uid());
 create policy "Scrims are public" on public.scrims for select using (true);
 create policy "Team members create scrims" on public.scrims for insert to authenticated with check (
   created_by = auth.uid() and exists (
@@ -211,109 +186,5 @@ create policy "Participants submit results" on public.match_results for insert t
   submitted_by = auth.uid() and public.is_scrim_participant(scrim_id)
 );
 create policy "Participants confirm results" on public.match_results for update using (public.is_scrim_participant(scrim_id));
-
-create or replace function public.accept_scrim(target_scrim uuid, challenger_team uuid)
-returns public.scrims
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  accepted_scrim public.scrims;
-begin
-  if auth.uid() is null then
-    raise exception 'You must be logged in.';
-  end if;
-
-  if not exists (
-    select 1 from public.team_members
-    where team_id = challenger_team
-      and profile_id = auth.uid()
-      and role in ('captain', 'manager')
-  ) then
-    raise exception 'Only a captain or manager can challenge another team.';
-  end if;
-
-  update public.scrims
-  set opponent_team_id = challenger_team,
-      status = 'accepted'
-  where id = target_scrim
-    and status = 'open'
-    and opponent_team_id is null
-    and host_team_id <> challenger_team
-  returning * into accepted_scrim;
-
-  if accepted_scrim.id is null then
-    raise exception 'This scrim is no longer available.';
-  end if;
-  return accepted_scrim;
-end;
-$$;
-
-grant execute on function public.accept_scrim(uuid, uuid) to authenticated;
-
-create or replace function public.submit_scrim_result(
-  target_scrim uuid,
-  winning_team uuid,
-  host_maps integer,
-  opponent_maps integer
-)
-returns public.match_results
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  target public.scrims;
-  caller_team uuid;
-  saved public.match_results;
-  losing_team uuid;
-begin
-  select * into target from public.scrims where id = target_scrim;
-  if target.id is null or target.opponent_team_id is null then raise exception 'Match not found.'; end if;
-  if winning_team not in (target.host_team_id, target.opponent_team_id) then raise exception 'Invalid winner.'; end if;
-  if host_maps < 0 or opponent_maps < 0 or host_maps = opponent_maps then raise exception 'Invalid score.'; end if;
-
-  select tm.team_id into caller_team
-  from public.team_members tm
-  where tm.profile_id = auth.uid()
-    and tm.team_id in (target.host_team_id, target.opponent_team_id)
-    and tm.role in ('captain', 'manager')
-  limit 1;
-  if caller_team is null then raise exception 'Only a captain or manager can confirm results.'; end if;
-
-  select * into saved from public.match_results where scrim_id = target_scrim;
-  if saved.id is null then
-    insert into public.match_results (
-      scrim_id, winner_team_id, host_score, opponent_score, submitted_by,
-      host_confirmed, opponent_confirmed
-    ) values (
-      target_scrim, winning_team, host_maps, opponent_maps, auth.uid(),
-      caller_team = target.host_team_id, caller_team = target.opponent_team_id
-    ) returning * into saved;
-  else
-    if saved.winner_team_id <> winning_team or saved.host_score <> host_maps or saved.opponent_score <> opponent_maps then
-      raise exception 'The submitted result does not match. Ask the original captain to correct it.';
-    end if;
-    update public.match_results set
-      host_confirmed = host_confirmed or caller_team = target.host_team_id,
-      opponent_confirmed = opponent_confirmed or caller_team = target.opponent_team_id
-    where id = saved.id returning * into saved;
-  end if;
-
-  if saved.host_confirmed and saved.opponent_confirmed and not saved.elo_processed then
-    losing_team := case when winning_team = target.host_team_id then target.opponent_team_id else target.host_team_id end;
-    update public.teams set elo = elo + 25, wins = wins + 1 where id = winning_team;
-    update public.teams set elo = greatest(0, elo - 25), losses = losses + 1 where id = losing_team;
-    update public.match_results set elo_processed = true where id = saved.id returning * into saved;
-    update public.scrims set status = 'completed' where id = target_scrim;
-  else
-    update public.scrims set status = 'awaiting_confirmation' where id = target_scrim;
-  end if;
-  return saved;
-end;
-$$;
-
-grant execute on function public.submit_scrim_result(uuid, uuid, integer, integer) to authenticated;
 
 alter publication supabase_realtime add table public.match_messages;
