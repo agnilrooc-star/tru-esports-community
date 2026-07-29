@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent, MouseEvent, ReactNode } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
-type View = "Home" | "Scrims" | "My Team" | "Socials" | "Rankings";
+type View = "Home" | "About" | "Teams" | "Join Tru" | "Scrims" | "My Team" | "Socials" | "Rankings";
 
 const rosters = {
   tru: ["Kyo", "Mira", "Raven", "Sage", "Flux"],
@@ -115,19 +116,29 @@ function Header({
   );
 }
 
-function LandingHeader({ onEnter }: { onEnter: () => void }) {
-  function scrollTo(id: string) {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+function LandingHeader({
+  active = "Home",
+  onView,
+  onEnter,
+}: {
+  active?: "Home" | "About" | "Teams" | "Join Tru";
+  onView: (view: View) => void;
+  onEnter: () => void;
+}) {
+  function goTo(event: MouseEvent<HTMLAnchorElement>, view: View, path: string) {
+    event.preventDefault();
+    window.history.pushState(null, "", path);
+    onView(view);
   }
 
   return (
     <header className="landing-header">
-      <button className="landing-logo" onClick={() => scrollTo("landing-home")} aria-label="Tru home"><TruMark /></button>
+      <Link className="landing-logo" href="/" onClick={(event) => goTo(event, "Home", "/")} aria-label="Tru home"><TruMark /></Link>
       <nav aria-label="Tru organization navigation">
-        <button className="active" onClick={() => scrollTo("landing-home")}>Home</button>
-        <button onClick={() => scrollTo("landing-about")}>About</button>
-        <button onClick={() => scrollTo("landing-teams")}>Teams</button>
-        <button onClick={() => scrollTo("landing-recruit")}>Join Tru</button>
+        <Link className={active === "Home" ? "active" : ""} href="/" onClick={(event) => goTo(event, "Home", "/")}>Home</Link>
+        <Link className={active === "About" ? "active" : ""} href="/#about" onClick={(event) => goTo(event, "About", "/#about")}>About</Link>
+        <Link className={active === "Teams" ? "active" : ""} href="/#teams" onClick={(event) => goTo(event, "Teams", "/#teams")}>Teams</Link>
+        <Link className={active === "Join Tru" ? "active" : ""} href="/#join" onClick={(event) => goTo(event, "Join Tru", "/#join")}>Join Tru</Link>
         <button onClick={onEnter}>TruSocials</button>
       </nav>
       <button className="enter-socials" onClick={onEnter}>Enter TruSocials <span>›</span></button>
@@ -205,6 +216,112 @@ function HomeView({
 
       <footer className="org-footer"><span>Built on passion. Driven by purpose. United by Tru.</span><span>Join us and be part of something Tru.</span><div><b>◉</b><b>♥</b><b>▶</b><b>▣</b></div></footer>
     </div>
+  );
+}
+
+function AboutView() {
+  const values = [
+    ["♕", "Competition", "We pursue excellence with discipline, always pushing to improve and elevate the scene."],
+    ["♙", "Community", "We build spaces where players, creators, and supporters belong and grow together."],
+    ["✎", "Creativity", "We celebrate bold ideas—from gameplay and events to content and storytelling."],
+    ["◇", "Integrity", "We lead with honesty, respect, and fairness in everything we do."],
+  ];
+
+  return (
+    <section className="org-subpage about-page">
+      <div className="org-subhero">
+        <div>
+          <p className="org-page-kicker">About Tru</p>
+          <h1>BUILT ON PASSION.<br />UNITED BY <span>TRU.</span></h1>
+          <p>We bring players, creators, and communities together across competitive gaming.</p>
+        </div>
+        <div className="about-stage"><div className="about-stage-mark"><TruMark /></div><i /><i /></div>
+      </div>
+
+      <div className="about-statbar">
+        {[["♙", "12K+", "Community members"], ["♕", "28", "Tournament wins"], ["◉", "45+", "Active creators"], ["◎", "18", "Countries represented"]].map(([icon, value, label]) => (
+          <div key={label}><i>{icon}</i><strong>{value}</strong><span>{label}</span></div>
+        ))}
+      </div>
+
+      <div className="about-story-grid">
+        <article><span className="org-panel-label">Our story</span><p>Tru was founded by gamers and creators who believe in the power of play to bring people together. What started as a community has grown into an esports organization supporting competition, tournaments, creators, and communities.</p><p>From grassroots events to elite competition, we create opportunities for talent to grow and communities to thrive.</p></article>
+        <article><span className="about-icon">⌾</span><div><h2>Mission</h2><p>Empower players, creators, and communities with the support, platforms, and resources they need to compete, create, and connect.</p></div></article>
+        <article><span className="about-icon">◉</span><div><h2>Vision</h2><p>Build a respected global esports organization that unites diverse games, creators, and communities under one banner.</p></div></article>
+      </div>
+
+      <div className="about-values">
+        <div className="org-section-title"><span>Our values</span><h2>WHAT MAKES US TRU.</h2></div>
+        <div>{values.map(([icon, title, copy]) => <article key={title}><i>{icon}</i><span><strong>{title}</strong><p>{copy}</p></span></article>)}</div>
+      </div>
+    </section>
+  );
+}
+
+function TeamsView({ onJoin }: { onJoin: () => void }) {
+  const players = [
+    ["01", "Kyo", "IGL"],
+    ["02", "Mira", "Duelist"],
+    ["03", "Raven", "Controller"],
+    ["04", "Sage", "Sentinel"],
+    ["05", "Flux", "Initiator"],
+  ];
+  const staff = [["⌁", "Head Coach"], ["▥", "Analyst"], ["♙", "Team Manager"], ["▻", "Content Lead"]];
+
+  return (
+    <section className="org-subpage teams-org-page">
+      <div className="teams-page-hero">
+        <div><p className="org-page-kicker">Current division</p><h1>THE TEAM THAT<br />REPRESENTS <span>TRU.</span></h1><p>Meet our current competitive division and the people carrying the Tru name forward.</p></div>
+        <div className="teams-hero-stage"><TruMark /></div>
+      </div>
+
+      <article className="flagship-team">
+        <div className="flagship-identity"><div className="valorant-v">V</div><span><small>Active · Philippines / SEA</small><h2>TRU VALORANT MOBILE</h2><p>Competitive Division</p></span></div>
+        <div className="flagship-roster">{players.map(([number, name, role]) => <div key={role}><i>{number}</i><span>{name.slice(0, 2).toUpperCase()}</span><strong>{name}</strong><small>{role}</small></div>)}</div>
+        <aside><span>Team manager<strong>Tru Staff</strong></span><span>Current ELO<strong>1724</strong></span><span>Season record<strong>26–10</strong></span><button>View full roster　›</button></aside>
+      </article>
+
+      <div className="support-team"><div className="org-section-title"><span>Staff & support</span><h2>BEHIND THE LINEUP.</h2></div><div>{staff.map(([icon, title]) => <article key={title}><i>{icon}</i><span><strong>{title}</strong><small>Tru Staff</small></span></article>)}</div></div>
+      <div className="team-join-strip"><TruMark compact /><h2>READY TO WEAR THE TRU NAME?</h2><button onClick={onJoin}>Apply to the team　›</button></div>
+    </section>
+  );
+}
+
+function JoinTruView() {
+  const [track, setTrack] = useState("Competitive Player");
+  const [submitted, setSubmitted] = useState(false);
+  const tracks = [
+    ["⌖", "Competitive Player"],
+    ["♙", "Team Manager & Coach"],
+    ["▻", "Content Creator"],
+    ["♟", "Community Staff"],
+  ];
+
+  return (
+    <section className="org-subpage join-org-page">
+      <div className="join-page-hero">
+        <p className="org-page-kicker">Join Tru</p>
+        <h1>FIND YOUR PLACE IN <span>TRU.</span></h1>
+        <p>Whether you compete, create, lead, or support the community—there is a place for you here.</p>
+      </div>
+
+      <div className="join-track-grid">{tracks.map(([icon, title]) => <button className={track === title ? "active" : ""} key={title} onClick={() => setTrack(title)}><i>{icon}</i><strong>{title}</strong></button>)}</div>
+      <div className="current-game"><span>Current competitive game</span><strong>VALORANT MOBILE</strong><b>V</b></div>
+
+      <div className="join-application">
+        <aside><span className="org-panel-label">Application</span><TruMark /><p>Choose your path, share your experience, and tell us what you want to build with Tru.</p></aside>
+        {submitted ? <div className="success-state"><span>✓</span><h2>APPLICATION RECEIVED.</h2><p>Thanks for choosing Tru. Our team will review your application and contact you through Discord.</p><button className="org-primary" onClick={() => setSubmitted(false)}>Submit another</button></div> :
+        <form onSubmit={(event) => { event.preventDefault(); setSubmitted(true); }}>
+          <div className="split-fields"><label>Display name / IGN<input required placeholder="Your name or IGN" /></label><label>Discord username<input required placeholder="@username" /></label></div>
+          <div className="split-fields"><label>Region<select required defaultValue=""><option value="" disabled>Select region</option><option>Philippines</option><option>SEA</option><option>Other</option></select></label><label>Applying as<select value={track} onChange={(event) => setTrack(event.target.value)}>{tracks.map(([, title]) => <option key={title}>{title}</option>)}</select></label></div>
+          <div className="split-fields"><label>Valorant Mobile role<select defaultValue="Duelist"><option>Duelist</option><option>Controller</option><option>Initiator</option><option>Sentinel</option><option>Flex</option><option>Not applicable</option></select></label><label>Availability<select defaultValue="Evenings"><option>Evenings</option><option>Weekends</option><option>Flexible</option></select></label></div>
+          <label>About you<textarea required placeholder="Experience, goals, and why you want to join Tru…" /></label>
+          <button className="org-primary" type="submit">Submit application　›</button>
+        </form>}
+      </div>
+
+      <div className="join-steps">{[["01", "Choose your role"], ["02", "Submit your profile"], ["03", "Hear from Tru"]].map(([number, label]) => <div key={number}><strong>{number}</strong><span>{label}</span></div>)}</div>
+    </section>
   );
 }
 
@@ -928,6 +1045,19 @@ export default function Home() {
     return () => data.subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    function syncOrganizationPage() {
+      const hash = window.location.hash;
+      if (hash === "#about") setView("About");
+      else if (hash === "#teams") setView("Teams");
+      else if (hash === "#join") setView("Join Tru");
+      else setView("Home");
+    }
+    syncOrganizationPage();
+    window.addEventListener("popstate", syncOrganizationPage);
+    return () => window.removeEventListener("popstate", syncOrganizationPage);
+  }, []);
+
   function changeView(next: View) {
     if (next === "My Team" && !loggedIn) {
       setAuthMode("login");
@@ -974,18 +1104,26 @@ export default function Home() {
     currentView = <SocialsView loggedIn={loggedIn} onAuthRequired={() => setAuthMode("login")} onProfile={(name) => showToast(`${name} profile preview`)} />;
   } else if (view === "Rankings") {
     currentView = <RankingsView />;
+  } else if (view === "About") {
+    currentView = <AboutView />;
+  } else if (view === "Teams") {
+    currentView = <TeamsView onJoin={() => { window.history.pushState(null, "", "/#join"); changeView("Join Tru"); }} />;
+  } else if (view === "Join Tru") {
+    currentView = <JoinTruView />;
   } else {
     currentView = <HomeView onView={changeView} onApply={setRecruitmentTrack} />;
   }
 
+  const organizationView = view === "Home" || view === "About" || view === "Teams" || view === "Join Tru";
+
   return (
     <main className="site-shell">
       <div className="ambient ambient--one" /><div className="ambient ambient--two" /><div className="grid-field" />
-      {view === "Home"
-        ? <LandingHeader onEnter={() => changeView("Socials")} />
+      {organizationView
+        ? <LandingHeader active={view as "Home" | "About" | "Teams" | "Join Tru"} onView={changeView} onEnter={() => { window.history.pushState(null, "", "/"); changeView("Socials"); }} />
         : <Header view={view} onView={changeView} onAuth={setAuthMode} loggedIn={loggedIn} onLogout={logout} />}
       <div className="view-shell" key={view}>{currentView}</div>
-      {view !== "Home" && <footer className="site-footer"><div className="brand"><TruMark /><span className="brand-name">TRU</span></div><p>Built for the Valorant Mobile community.</p><span>be-tru.team · Version 1</span></footer>}
+      {!organizationView && <footer className="site-footer"><div className="brand"><TruMark /><span className="brand-name">TRU</span></div><p>Built for the competitive gaming community.</p><span>be-tru.team · Version 1</span></footer>}
       {authMode && <AuthModal mode={authMode} onClose={() => setAuthMode(null)} onSuccess={finishAuth} />}
       {recruitmentTrack && <RecruitmentModal track={recruitmentTrack} onClose={() => setRecruitmentTrack(null)} />}
       {teamModal && <TeamModal onClose={() => setTeamModal(false)} />}
