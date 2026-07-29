@@ -67,12 +67,16 @@ function Header({
   onAuth,
   loggedIn,
   onLogout,
+  displayName,
+  teamName,
 }: {
   view: View;
   onView: (view: View) => void;
   onAuth: (mode: "login" | "join") => void;
   loggedIn: boolean;
   onLogout: () => void;
+  displayName: string;
+  teamName: string;
 }) {
   const navItems: View[] = loggedIn
     ? ["Home", "Scrims", "My Team", "Socials", "Rankings"]
@@ -100,8 +104,8 @@ function Header({
         {loggedIn ? (
           <div className="signed-account">
             <button className="account-profile" onClick={() => onView("My Team")}>
-              <Avatar initials="DT" />
-              <span><strong>Daniel</strong><small>Tru Phantoms</small></span>
+              <Avatar initials={displayName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "TR"} />
+              <span><strong>{displayName}</strong><small>{teamName}</small></span>
             </button>
             <button className="logout-button" onClick={onLogout} aria-label="Log out" title="Log out">↗</button>
           </div>
@@ -661,7 +665,19 @@ function ScrimsView({
   }
 
   const myMatches = team
-    ? liveScrims.filter((scrim) => scrim.host_team_id === team.id || scrim.opponent_team_id === team.id)
+    ? liveScrims.filter(
+        (scrim) =>
+          (scrim.host_team_id === team.id || scrim.opponent_team_id === team.id) &&
+          scrim.status !== "completed" &&
+          scrim.status !== "cancelled",
+      )
+    : [];
+  const matchHistory = team
+    ? liveScrims.filter(
+        (scrim) =>
+          (scrim.host_team_id === team.id || scrim.opponent_team_id === team.id) &&
+          scrim.status === "completed",
+      )
     : [];
 
   return (
@@ -711,6 +727,8 @@ function ScrimsView({
       </div>
 
       {team && <section className="my-live-matches"><div className="org-section-title"><span>Your challenges</span><h2>PRIVATE MATCH ROOMS.</h2></div>{myMatches.length === 0 ? <p>No challenges yet.</p> : <div>{myMatches.map((scrim) => <article key={scrim.id}><span className={`match-status match-status--${scrim.status}`}>{scrim.status}</span><strong>{scrim.host_team.name} vs {scrim.opponent_team?.name ?? "Waiting for opponent"}</strong><small>{scrim.format} · {new Date(scrim.scheduled_at).toLocaleString()}</small>{scrim.opponent_team && <button onClick={() => setActiveRoom(scrim)}>Enter private room →</button>}</article>)}</div>}</section>}
+
+      {team && matchHistory.length > 0 && <section className="my-live-matches"><div className="org-section-title"><span>Match history</span><h2>COMPLETED SCRIMS.</h2></div><div>{matchHistory.map((scrim) => <article key={scrim.id}><span className="match-status match-status--completed">completed</span><strong>{scrim.host_team.name} vs {scrim.opponent_team?.name ?? "Opponent"}</strong><small>{scrim.format} · {new Date(scrim.scheduled_at).toLocaleString()}</small></article>)}</div></section>}
 
       {teamForm && <div className="modal-backdrop" onMouseDown={() => setTeamForm(false)}><section className="live-form-modal" role="dialog" aria-modal="true" aria-label="Create a team" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setTeamForm(false)}>×</button><p className="eyebrow">Team setup</p><h2>CREATE YOUR TEAM.</h2><form onSubmit={createTeam}><label>Team name<input name="name" required maxLength={40} placeholder="e.g. Tru Phantoms" /></label><label>Team tag<input name="tag" required maxLength={5} placeholder="TRU" /></label><label>Region<select name="region" defaultValue="Philippines"><option>Philippines</option><option>SEA</option><option>Singapore</option><option>Other</option></select></label><button className="button" type="submit">Create team →</button></form></section></div>}
 
@@ -787,8 +805,10 @@ function LiveMatchRoom({ scrim, userId, myTeam, onClose, onRefresh }: { scrim: L
     });
     if (error) setRoomError(error.message);
     else {
-      setResult(data as unknown as typeof result);
+      const confirmedResult = data as unknown as typeof result;
+      setResult(confirmedResult);
       await onRefresh();
+      if (confirmedResult?.elo_processed) onClose();
     }
   }
 
@@ -1262,7 +1282,15 @@ function AuthModal({
 
     setSubmitting(false);
     if (result.error) {
-      setAuthError(result.error.message);
+      const rawMessage = String(result.error.message ?? "").trim();
+      const unusableMessage = !rawMessage || rawMessage === "0" || rawMessage === "[object Object]";
+      setAuthError(
+        unusableMessage
+          ? tab === "join"
+            ? "We couldn't create your account or send the confirmation email. Please check the email address and try again. If this continues, the site's email service needs attention."
+            : "We couldn't log you in. Please check your email and password, then try again."
+          : rawMessage,
+      );
       return;
     }
 
@@ -1485,19 +1513,37 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"login" | "join" | null>(null);
   const [loggedIn, setLoggedIn] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [accountName, setAccountName] = useState("Tru member");
+  const [accountTeam, setAccountTeam] = useState("No team yet");
   const [teamModal, setTeamModal] = useState(false);
   const [matchOpen, setMatchOpen] = useState(false);
   const [recruitmentTrack, setRecruitmentTrack] = useState<"player" | "staff" | null>(null);
   const [toast, setToast] = useState("");
 
   useEffect(() => {
+    async function loadAccountIdentity(id: string, email?: string) {
+      const [{ data: profile }, { data: membership }] = await Promise.all([
+        supabase.from("profiles").select("display_name").eq("id", id).maybeSingle(),
+        supabase.from("team_members").select("teams!inner(name)").eq("profile_id", id).limit(1).maybeSingle(),
+      ]);
+      const linkedTeam = membership?.teams as unknown as { name?: string } | null;
+      setAccountName(profile?.display_name?.trim() || email?.split("@")[0] || "Tru member");
+      setAccountTeam(linkedTeam?.name || "No team yet");
+    }
+
     supabase.auth.getSession().then(({ data }) => {
       setLoggedIn(Boolean(data.session));
       setUserId(data.session?.user.id ?? null);
+      if (data.session?.user.id) void loadAccountIdentity(data.session.user.id, data.session.user.email);
     });
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       setLoggedIn(Boolean(session));
       setUserId(session?.user.id ?? null);
+      if (session?.user.id) void loadAccountIdentity(session.user.id, session.user.email);
+      else {
+        setAccountName("Tru member");
+        setAccountTeam("No team yet");
+      }
     });
     return () => data.subscription.unsubscribe();
   }, []);
@@ -1571,7 +1617,7 @@ export default function Home() {
       <div className="ambient ambient--one" /><div className="ambient ambient--two" /><div className="grid-field" />
       {organizationView
         ? <LandingHeader active={view as "Home" | "About" | "Teams" | "Join Tru"} onView={changeView} onEnter={() => { window.history.pushState(null, "", "/"); changeView("Socials"); }} />
-        : <Header view={view} onView={changeView} onAuth={setAuthMode} loggedIn={loggedIn} onLogout={logout} />}
+        : <Header view={view} onView={changeView} onAuth={setAuthMode} loggedIn={loggedIn} onLogout={logout} displayName={accountName} teamName={accountTeam} />}
       <div className="view-shell" key={view}>{currentView}</div>
       {!organizationView && <footer className="site-footer"><div className="brand"><TruMark /><span className="brand-name">TRU</span></div><p>Built for the competitive gaming community.</p><span>be-tru.team · Version 1</span></footer>}
       {authMode && <AuthModal mode={authMode} onClose={() => setAuthMode(null)} onSuccess={finishAuth} />}
