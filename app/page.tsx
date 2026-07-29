@@ -754,11 +754,20 @@ function LiveMatchRoom({ scrim, userId, myTeam, onClose, onRefresh }: { scrim: L
     else setMessages((data ?? []) as unknown as typeof messages);
     const { data: resultData } = await supabase.from("match_results").select("winner_team_id,host_score,opponent_score,host_confirmed,opponent_confirmed,elo_processed").eq("scrim_id", scrim.id).maybeSingle();
     setResult(resultData);
+    if (resultData?.elo_processed) {
+      await onRefresh();
+      onClose();
+    }
   }
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void loadMessages(), 0);
-    const channel = supabase.channel(`match-${scrim.id}`).on("postgres_changes", { event: "INSERT", schema: "public", table: "match_messages", filter: `scrim_id=eq.${scrim.id}` }, () => void loadMessages()).subscribe();
+    const channel = supabase
+      .channel(`match-${scrim.id}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "match_messages", filter: `scrim_id=eq.${scrim.id}` }, () => void loadMessages())
+      .on("postgres_changes", { event: "*", schema: "public", table: "match_results", filter: `scrim_id=eq.${scrim.id}` }, () => void loadMessages())
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "scrims", filter: `id=eq.${scrim.id}` }, () => void loadMessages())
+      .subscribe();
     return () => { window.clearTimeout(initialLoad); void supabase.removeChannel(channel); };
     // loadMessages is scoped to this immutable match room.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -773,7 +782,11 @@ function LiveMatchRoom({ scrim, userId, myTeam, onClose, onRefresh }: { scrim: L
   }
 
   async function saveRoomDetails() {
-    const { error } = await supabase.from("scrims").update({ room_code: roomCode.trim(), room_password: roomPassword.trim(), status: "live" }).eq("id", scrim.id);
+    const { error } = await supabase
+      .from("scrims")
+      .update({ room_code: roomCode.trim(), room_password: roomPassword.trim(), status: "live" })
+      .eq("id", scrim.id)
+      .in("status", ["accepted", "live"]);
     if (error) setRoomError(error.message);
     else await onRefresh();
   }
