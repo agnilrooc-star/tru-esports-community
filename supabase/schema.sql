@@ -66,6 +66,21 @@ create table public.posts (
   created_at timestamptz not null default now()
 );
 
+create table public.post_likes (
+  post_id uuid not null references public.posts(id) on delete cascade,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (post_id, profile_id)
+);
+
+create table public.post_comments (
+  id bigint generated always as identity primary key,
+  post_id uuid not null references public.posts(id) on delete cascade,
+  author_id uuid not null references public.profiles(id) on delete cascade,
+  body text not null check (char_length(body) between 1 and 1000),
+  created_at timestamptz not null default now()
+);
+
 create table public.scrims (
   id uuid primary key default gen_random_uuid(),
   host_team_id uuid not null references public.teams(id) on delete cascade,
@@ -146,6 +161,8 @@ alter table public.teams enable row level security;
 alter table public.team_members enable row level security;
 alter table public.team_invites enable row level security;
 alter table public.posts enable row level security;
+alter table public.post_likes enable row level security;
+alter table public.post_comments enable row level security;
 alter table public.scrims enable row level security;
 alter table public.match_messages enable row level security;
 alter table public.match_results enable row level security;
@@ -170,6 +187,12 @@ create policy "Posts are public" on public.posts for select using (true);
 create policy "Users create posts" on public.posts for insert to authenticated with check (author_id = auth.uid());
 create policy "Authors manage posts" on public.posts for update using (author_id = auth.uid());
 create policy "Authors delete posts" on public.posts for delete using (author_id = auth.uid());
+create policy "Likes are public" on public.post_likes for select using (true);
+create policy "Users like posts" on public.post_likes for insert to authenticated with check (profile_id = auth.uid());
+create policy "Users remove own likes" on public.post_likes for delete using (profile_id = auth.uid());
+create policy "Comments are public" on public.post_comments for select using (true);
+create policy "Users create comments" on public.post_comments for insert to authenticated with check (author_id = auth.uid());
+create policy "Authors delete comments" on public.post_comments for delete using (author_id = auth.uid());
 create policy "Scrims are public" on public.scrims for select using (true);
 create policy "Team members create scrims" on public.scrims for insert to authenticated with check (
   created_by = auth.uid() and exists (

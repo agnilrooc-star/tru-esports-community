@@ -803,7 +803,8 @@ function LiveMatchRoom({ scrim, userId, myTeam, onClose, onRefresh }: { scrim: L
   </section></div>;
 }
 
-function SocialsView({
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function SocialsPreviewView({
   onProfile,
   loggedIn,
   onAuthRequired,
@@ -888,6 +889,107 @@ function SocialsView({
       </div>
     </section>
   );
+}
+
+type SocialPost = {
+  id: string;
+  author_id: string;
+  body: string;
+  post_type: string;
+  created_at: string;
+  profiles: { display_name: string; username: string | null; region: string | null } | null;
+  post_likes: Array<{ profile_id: string }>;
+  post_comments: Array<{ id: number }>;
+};
+
+function SocialsView({ userId, loggedIn, onAuthRequired }: { userId: string | null; loggedIn: boolean; onAuthRequired: () => void; onProfile?: (name: string) => void }) {
+  const [posts, setPosts] = useState<SocialPost[]>([]);
+  const [profile, setProfile] = useState<{ display_name: string; username: string | null; region: string | null; account_role: string } | null>(null);
+  const [draft, setDraft] = useState("");
+  const [postType, setPostType] = useState("general");
+  const [socialError, setSocialError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [commentPost, setCommentPost] = useState<SocialPost | null>(null);
+  const [comments, setComments] = useState<Array<{ id: number; author_id: string; body: string; created_at: string; profiles: { display_name: string } | null }>>([]);
+  const [commentDraft, setCommentDraft] = useState("");
+
+  async function loadFeed() {
+    const { data, error } = await supabase.from("posts").select("id,author_id,body,post_type,created_at,profiles(display_name,username,region),post_likes(profile_id),post_comments(id)").order("created_at", { ascending: false }).limit(50);
+    if (error) setSocialError(error.message);
+    else setPosts((data ?? []) as unknown as SocialPost[]);
+    if (userId) {
+      const { data: me } = await supabase.from("profiles").select("display_name,username,region,account_role").eq("id", userId).maybeSingle();
+      setProfile(me);
+    } else setProfile(null);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => void loadFeed(), 0);
+    const channel = supabase.channel("tru-social-feed").on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => void loadFeed()).on("postgres_changes", { event: "*", schema: "public", table: "post_likes" }, () => void loadFeed()).on("postgres_changes", { event: "*", schema: "public", table: "post_comments" }, () => void loadFeed()).subscribe();
+    return () => { window.clearTimeout(initialLoad); void supabase.removeChannel(channel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  async function publishPost(event: FormEvent) {
+    event.preventDefault();
+    if (!userId) return onAuthRequired();
+    if (!draft.trim()) return;
+    const { error } = await supabase.from("posts").insert({ author_id: userId, body: draft.trim(), post_type: postType });
+    if (error) setSocialError(error.message);
+    else { setDraft(""); setPostType("general"); await loadFeed(); }
+  }
+
+  async function toggleLike(post: SocialPost) {
+    if (!userId) return onAuthRequired();
+    const liked = post.post_likes.some((like) => like.profile_id === userId);
+    const query = liked
+      ? supabase.from("post_likes").delete().eq("post_id", post.id).eq("profile_id", userId)
+      : supabase.from("post_likes").insert({ post_id: post.id, profile_id: userId });
+    const { error } = await query;
+    if (error) setSocialError(error.message); else await loadFeed();
+  }
+
+  async function deletePost(postId: string) {
+    const { error } = await supabase.from("posts").delete().eq("id", postId);
+    if (error) setSocialError(error.message); else await loadFeed();
+  }
+
+  async function openComments(post: SocialPost) {
+    setCommentPost(post);
+    const { data, error } = await supabase.from("post_comments").select("id,author_id,body,created_at,profiles(display_name)").eq("post_id", post.id).order("created_at");
+    if (error) setSocialError(error.message); else setComments((data ?? []) as unknown as typeof comments);
+  }
+
+  async function addComment(event: FormEvent) {
+    event.preventDefault();
+    if (!userId) return onAuthRequired();
+    if (!commentPost || !commentDraft.trim()) return;
+    const { error } = await supabase.from("post_comments").insert({ post_id: commentPost.id, author_id: userId, body: commentDraft.trim() });
+    if (error) setSocialError(error.message);
+    else { setCommentDraft(""); await openComments(commentPost); await loadFeed(); }
+  }
+
+  const initials = (profile?.display_name ?? "TRU").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+
+  return <section className="app-page live-socials-page">
+    <PageIntro kicker="Tru Socials" title="YOUR GAME. YOUR PEOPLE." copy="Real community posts, reactions, and conversations stored securely with Supabase." />
+    {socialError && <div className="scrim-system-error"><strong>Socials error</strong><span>{socialError}</span><button onClick={() => setSocialError("")}>×</button></div>}
+    <div className="social-layout">
+      {loggedIn ? <aside className="profile-card panel-card live-profile-card"><div className="profile-cover"><div className="profile-avatar">{initials}<span /></div></div><h2>{profile?.display_name ?? "Tru member"}</h2><p>@{profile?.username ?? "set-your-username"} · {profile?.region ?? "SEA"}</p><span className="role-chip">{profile?.account_role ?? "player"}</span><div className="profile-stats"><div><b>{posts.filter((post) => post.author_id === userId).length}</b><span>Posts</span></div><div><b>{posts.reduce((total, post) => total + post.post_likes.length, 0)}</b><span>Feed likes</span></div><div><b>Online</b><span>Status</span></div></div></aside> : <aside className="profile-card profile-card--guest panel-card"><div className="guest-profile-mark"><TruMark compact /></div><p className="eyebrow">Your profile</p><h2>JOIN THE CONVERSATION.</h2><p>Log in to post, like, and comment.</p><button className="button button--small" onClick={onAuthRequired}>Log in or join</button></aside>}
+      <div className="feed">
+        <form className="composer live-composer" onSubmit={publishPost}><Avatar initials={initials} /><label><span className="sr-only">Create a post</span><textarea maxLength={2000} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={loggedIn ? "Share an update with Tru…" : "Log in to share with Tru…"} /></label><div className="composer-actions"><select value={postType} onChange={(event) => setPostType(event.target.value)}><option value="general">General</option><option value="lft">Looking for team</option><option value="match">Match update</option><option value="highlight">Highlight</option></select><span>{draft.length}/2000</span><button type="submit">{loggedIn ? "Post" : "Log in"}</button></div></form>
+        {loading ? <div className="live-empty">Loading the Tru feed…</div> : posts.length === 0 ? <div className="live-empty"><TruMark compact /><strong>No posts yet.</strong><span>Start the first conversation.</span></div> : posts.map((post) => {
+          const name = post.profiles?.display_name ?? "Tru member";
+          const postInitials = name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+          const liked = Boolean(userId && post.post_likes.some((like) => like.profile_id === userId));
+          return <article className="feed-post live-feed-post" key={post.id}><Avatar initials={postInitials} /><div><div className="post-head"><span><strong>{name}</strong><small>@{post.profiles?.username ?? "tru-member"}</small></span><span className="post-tag">{post.post_type}</span><time>{new Date(post.created_at).toLocaleString()}</time>{post.author_id === userId && <button onClick={() => void deletePost(post.id)} aria-label="Delete post">×</button>}</div><p>{post.body}</p><div className="post-actions"><button onClick={() => void openComments(post)}>◯ {post.post_comments.length}</button><button className={liked ? "liked" : ""} onClick={() => void toggleLike(post)}>♡ {post.post_likes.length}</button><button onClick={() => navigator.clipboard?.writeText(window.location.href)}>↗ Share</button></div></div></article>;
+        })}
+      </div>
+      <aside className="community-aside"><div className="panel-card trending-card"><div className="card-label"><span>Community guide</span></div><div className="social-guide"><strong>Be competitive.</strong><p>Keep posts constructive and respectful.</p><strong>Find your five.</strong><p>Use Looking for Team to recruit.</p><strong>Be Tru.</strong><p>Your profile and activity represent you.</p></div></div></aside>
+    </div>
+    {commentPost && <div className="modal-backdrop" onMouseDown={() => setCommentPost(null)}><section className="comments-modal" role="dialog" aria-modal="true" aria-label="Post comments" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setCommentPost(null)}>×</button><p className="eyebrow">Conversation</p><h2>{commentPost.profiles?.display_name ?? "Tru member"}</h2><blockquote>{commentPost.body}</blockquote><div className="comments-list">{comments.length === 0 ? <p>No comments yet.</p> : comments.map((comment) => <article key={comment.id}><strong>{comment.profiles?.display_name ?? "Member"}</strong><p>{comment.body}</p><small>{new Date(comment.created_at).toLocaleString()}</small></article>)}</div><form onSubmit={addComment}><input value={commentDraft} onChange={(event) => setCommentDraft(event.target.value)} maxLength={1000} placeholder={loggedIn ? "Write a comment…" : "Log in to comment"} /><button type="submit">Comment</button></form></section></div>}
+  </section>;
 }
 
 function MyTeamView({
@@ -1037,7 +1139,8 @@ function MyTeamView({
   );
 }
 
-function RankingsView() {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function RankingsPreviewView() {
   const [period, setPeriod] = useState("Season 01");
   return (
     <section className="app-page">
@@ -1077,6 +1180,50 @@ function RankingsView() {
       </div>
     </section>
   );
+}
+
+type RankedTeam = { id: string; name: string; tag: string; region: string; elo: number; wins: number; losses: number };
+
+function RankingsView() {
+  const [teams, setTeams] = useState<RankedTeam[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [rankingError, setRankingError] = useState("");
+
+  async function loadRankings() {
+    const { data, error } = await supabase.from("teams").select("id,name,tag,region,elo,wins,losses").order("elo", { ascending: false }).order("wins", { ascending: false });
+    if (error) setRankingError(error.message); else setTeams((data ?? []) as RankedTeam[]);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => void loadRankings(), 0);
+    const channel = supabase.channel("team-rankings").on("postgres_changes", { event: "*", schema: "public", table: "teams" }, () => void loadRankings()).subscribe();
+    return () => { window.clearTimeout(initialLoad); void supabase.removeChannel(channel); };
+  }, []);
+
+  function division(elo: number) {
+    if (elo >= 1800) return "Challenger";
+    if (elo >= 1600) return "Immortal";
+    if (elo >= 1400) return "Ascendant";
+    if (elo >= 1200) return "Diamond";
+    return "Platinum";
+  }
+
+  const podiumOrder = teams.length >= 3 ? [teams[1], teams[0], teams[2]] : teams;
+  return <section className="app-page live-rankings-page">
+    <PageIntro kicker="Live Competitive Rankings" title="EARN YOUR PLACE." copy="Confirmed scrim results automatically update team records, ELO, and the Tru ladder." action={<button className="wide-outline" onClick={() => void loadRankings()}>Refresh rankings</button>} />
+    {rankingError && <div className="scrim-system-error"><strong>Rankings error</strong><span>{rankingError}</span></div>}
+    {!loading && teams.length >= 1 && <div className="podium">{podiumOrder.map((team) => { const rank = teams.findIndex((entry) => entry.id === team.id) + 1; return <article className={rank === 1 ? "podium-card podium-card--winner" : "podium-card"} key={team.id}><span className="podium-rank">{String(rank).padStart(2, "0")}</span><TeamBadge tag={team.tag} tru={team.tag === "TRU"} /><strong>{team.name}</strong><span>{team.elo} ELO</span><small>{team.wins}–{team.losses} record</small></article>; })}</div>}
+    <div className="ranking-table panel-card">
+      <div className="ranking-table-head"><span>Rank</span><span>Team</span><span>ELO</span><span>Record</span><span>Win rate</span><span>Division</span></div>
+      {loading ? <div className="live-empty">Loading live rankings…</div> : teams.length === 0 ? <div className="live-empty"><TruMark compact /><strong>No ranked teams yet.</strong><span>Create a team and complete a confirmed scrim to enter the ladder.</span></div> : teams.map((team, index) => {
+        const games = team.wins + team.losses;
+        const winRate = games ? Math.round((team.wins / games) * 100) : 0;
+        return <div className={team.tag === "TRU" ? "ranking-row ranking-row--tru" : "ranking-row"} key={team.id}><b>{String(index + 1).padStart(2, "0")}</b><div><TeamBadge tag={team.tag} tru={team.tag === "TRU"} /><span><strong>{team.name}</strong><small>{team.tag} · {team.region}</small></span></div><strong>{team.elo}</strong><span>{team.wins}–{team.losses}</span><span>{winRate}%</span><em>{division(team.elo)}</em></div>;
+      })}
+    </div>
+    <div className="elo-explainer"><div><span>DIVISION 01</span><strong>Challenger</strong><small>1800+ ELO</small></div><div><span>DIVISION 02</span><strong>Immortal</strong><small>1600–1799</small></div><div><span>DIVISION 03</span><strong>Ascendant</strong><small>1400–1599</small></div><div><span>DIVISION 04</span><strong>Diamond</strong><small>1200–1399</small></div></div>
+  </section>;
 }
 
 function AuthModal({
@@ -1404,7 +1551,7 @@ export default function Home() {
   } else if (view === "My Team" && loggedIn) {
     currentView = <MyTeamView onManage={() => setTeamModal(true)} onOpenMatch={() => setMatchOpen(true)} onToast={showToast} />;
   } else if (view === "Socials") {
-    currentView = <SocialsView loggedIn={loggedIn} onAuthRequired={() => setAuthMode("login")} onProfile={(name) => showToast(`${name} profile preview`)} />;
+    currentView = <SocialsView userId={userId} loggedIn={loggedIn} onAuthRequired={() => setAuthMode("login")} />;
   } else if (view === "Rankings") {
     currentView = <RankingsView />;
   } else if (view === "About") {
