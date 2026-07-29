@@ -914,7 +914,7 @@ function SocialsView({ userId, loggedIn, onAuthRequired }: { userId: string | nu
   const [commentDraft, setCommentDraft] = useState("");
 
   async function loadFeed() {
-    const { data, error } = await supabase.from("posts").select("id,author_id,body,post_type,created_at,profiles(display_name,username,region),post_likes(profile_id),post_comments(id)").order("created_at", { ascending: false }).limit(50);
+    const { data, error } = await supabase.from("posts").select("id,author_id,body,post_type,created_at,profiles!posts_author_id_fkey(display_name,username,region),post_likes(profile_id),post_comments(id)").order("created_at", { ascending: false }).limit(50);
     if (error) setSocialError(error.message);
     else setPosts((data ?? []) as unknown as SocialPost[]);
     if (userId) {
@@ -957,7 +957,7 @@ function SocialsView({ userId, loggedIn, onAuthRequired }: { userId: string | nu
 
   async function openComments(post: SocialPost) {
     setCommentPost(post);
-    const { data, error } = await supabase.from("post_comments").select("id,author_id,body,created_at,profiles(display_name)").eq("post_id", post.id).order("created_at");
+    const { data, error } = await supabase.from("post_comments").select("id,author_id,body,created_at,profiles!post_comments_author_id_fkey(display_name)").eq("post_id", post.id).order("created_at");
     if (error) setSocialError(error.message); else setComments((data ?? []) as unknown as typeof comments);
   }
 
